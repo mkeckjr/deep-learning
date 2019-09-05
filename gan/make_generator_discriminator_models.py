@@ -186,6 +186,8 @@ def construct_generator(output_rows,
                                             strides=strides,
                                             padding=padding,
                                             data_format='channels_first'))
+
+        generator_model.add(LeakyReLU(alpha=0.2))
         prev_size = filter_size
 
     # one final upsample/convolutoin to get to the output space
