@@ -200,7 +200,8 @@ def construct_generator(output_rows,
                                         kernel_sizes,
                                         strides=strides,
                                         padding=padding,
-                                        data_format='channels_first'))
+                                        data_format='channels_first',
+                                        activation='tanh'))
 
     print('GENERATOR\n')
     generator_model.summary()
