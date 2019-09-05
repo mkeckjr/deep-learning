@@ -15,42 +15,42 @@ from keras.layers import (Activation,
                           LeakyReLU,
                           Reshape,
                           )
-from keras.layers.convolutional import Conv2D, Conv2DTranspose
+from keras.layers.convolutional import Conv2D, Conv2DTranspose, UpSampling2D
 from keras.models import Model, Sequential
 
 
-def compute_projection_size(sequential_layer_kernels,
-                            sequential_layer_padding,
-                            sequential_layer_strides,
-                            output_rc):
-    cur_layer_rc = [output_rc[0], output_rc[1]]
-    for kernel, padding, strides in zip(
-            sequential_layer_kernels[::-1],
-            sequential_layer_padding[::-1],
-            sequential_layer_strides[::-1]):
-        if padding == 'valid':
-            remove = [2*(kernel[0]//2), 2*(kernel[1]//2)]
-        elif padding == 'same':
-            remove = [0,0]
+def compute_transpose_conv2d_size(prev_size, new_size):
+    # get the scale factor for each of the rows/cols
+    row_stride = new_size[1] // prev_size[1]
+    col_stride = new_size[2] // prev_size[2]
 
-        cur_layer_rc[0] = (cur_layer_rc[0] - remove[0]) // strides[0]
-        cur_layer_rc[1] = (cur_layer_rc[1] - remove[1]) // strides[1]
+    if 0 == row_stride or 0 == col_stride:
+        raise RuntimeError('Conv2DTranspose {} -> {} impossible due to '
+                           'zero stride'.format(prev_size, filter_size))
 
-        print('( {}, {} )'.format(cur_layer_rc[0], cur_layer_rc[1]))
+    if (new_size[1] == row_stride * prev_size[1] and
+        new_size[2] == col_stride * prev_size[2]):
+        # here we can use same padding and just leave
+        return "same", (row_stride, col_stride), (1,1)
 
-    return cur_layer_rc
+    # in this case we have to use "valid" padding, so we need to compute the
+    # kernel size for each of the filters
+    row_kernel_size = (new_size[1] - row_stride * (prev_size[1]-1))
+    col_kernel_size = (new_size[2] - row_stride * (prev_size[2]-1))
+
+    return "valid", (row_stride, col_stride), (row_kernel_size, col_kernel_size)
 
 
-def construct_generator(output_rows,
-                        output_cols,
-                        output_channels,
-                        latent_dim,
-                        layer_filters,
-                        kernel_size,
-                        n_reshape_channels=1,
-                        strides=2):
+def construct_generator_old(output_rows,
+                            output_cols,
+                            output_channels,
+                            latent_dim,
+                            layer_filters,
+                            kernel_size,
+                            n_reshape_channels=1,
+                            strides=2):
     n_layers = len(layer_filters)
-    
+
     sequential_kernels = [[kernel_size, kernel_size]] * n_layers
     sequential_strides = [[strides, strides]] * n_layers
     sequential_padding = ['same'] * n_layers
@@ -108,16 +108,138 @@ def construct_generator(output_rows,
     return Model(ginput, goutput)
 
 
+def construct_generator_upsample(output_rows,
+                                 output_cols,
+                                 output_channels,
+                                 latent_dim,
+                                 layer_filters,
+                                 kernel_size):
+    generator_model = Sequential()
+
+    prev_size = layer_filters[0]
+    input_dense_size = prev_size[0]*prev_size[1]*prev_size[2]
+    generator_model.add(Dense(input_dense_size,
+                              activation="relu",
+                              input_dim=latent_dim))
+
+    generator_model.add(Reshape(prev_size))
+
+    for filter_size in layer_filters[1:]:
+        # get the scale factor for each of the rows/cols
+        row_scale = filter_size[1] / float(prev_size[1])
+        col_scale = filter_size[2] / float(prev_size[2])
+
+        # add an upsampler
+        generator_model.add(UpSampling2D(size=(row_scale, col_scale),
+                                         data_format='channels_first'))
+        generator_model.add(Conv2D(filter_size[0],
+                                   kernel_size,
+                                   padding='same',
+                                   data_format='channels_first'))
+        prev_size = filter_size
+
+    # one final upsample/convolutoin to get to the output space
+    row_scale = float(output_rows) / prev_size[1]
+    col_scale = float(output_cols) / prev_size[2]
+
+    generator_model.add(UpSampling2D(size=(row_scale, col_scale),
+                                     data_format='channels_first'))
+    generator_model.add(Conv2D(output_channels, kernel_size,
+                               padding='same',
+                               data_format='channels_first'))
+
+    print('GENERATOR\n')
+    generator_model.summary()
+    print()
+
+    ginput = Input(shape=(latent_dim,))
+    goutput = generator_model(ginput)
+    gmodel = Model(ginput, goutput)
+
+    return gmodel
+
+def construct_generator(output_rows,
+                        output_cols,
+                        output_channels,
+                        latent_dim,
+                        layer_filters):
+                        # kernel_size):
+    generator_model = Sequential()
+
+    prev_size = layer_filters[0]
+    input_dense_size = prev_size[0]*prev_size[1]*prev_size[2]
+    generator_model.add(Dense(input_dense_size,
+                              activation="relu",
+                              input_dim=latent_dim))
+
+    generator_model.add(Reshape(prev_size))
+
+    for filter_size in layer_filters[1:]:
+        # make sure we get the correct stride setting
+        padding, strides, kernel_sizes = compute_transpose_conv2d_size(
+            prev_size,
+            filter_size)
+
+        # add an upsampler
+        generator_model.add(Conv2DTranspose(filter_size[0],
+                                            kernel_sizes,
+                                            strides=strides,
+                                            padding=padding,
+                                            data_format='channels_first'))
+        prev_size = filter_size
+
+    # one final upsample/convolutoin to get to the output space
+    padding, strides, kernel_sizes = compute_transpose_conv2d_size(
+            prev_size,
+            [output_channels, output_rows, output_cols])
+
+    # add an upsampler
+    generator_model.add(Conv2DTranspose(output_channels,
+                                        kernel_sizes,
+                                        strides=strides,
+                                        padding=padding,
+                                        data_format='channels_first'))
+
+    print('GENERATOR\n')
+    generator_model.summary()
+    print()
+
+    ginput = Input(shape=(latent_dim,))
+    goutput = generator_model(ginput)
+    gmodel = Model(ginput, goutput)
+
+    return gmodel
+
+
 def construct_discriminator(rows,
                             cols,
                             channels,
                             layer_filters,
                             kernel_size,
                             strides=2):
+    """Construct a discriminator/critic for Wasserstein-style GANs
+
+    Args:
+        rows: size of input image rows
+        cols: size of input image cols
+        channels: number of channels in the input
+        layers_filters: list of integers where the length indicates the number
+            of convolutional layers to use, and the value of each element
+            is the number of filters to apply at each layer.
+        kernel_size: integer indicating the width/height of each square
+            convolutional kernel
+        strides: integer indicating the stride to take at each layer
+
+    Returns:
+        A Keras convolutional model with a 4D tensor as input for imagery and
+            a single real output.
+    """
 
     discriminator_model = Sequential()
 
     first = True
+    output_filters = []
+
     for filter_size in layer_filters:
         if first:
             discriminator_model.add(Conv2D(filter_size,
@@ -133,6 +255,10 @@ def construct_discriminator(rows,
                                            strides=strides,
                                            padding='same',
                                            data_format='channels_first'))
+
+        new_layer = discriminator_model.layers[-1]
+        output_filters.append(new_layer.output_shape[1:])
+
         discriminator_model.add(BatchNormalization(momentum=0.8))
         discriminator_model.add(LeakyReLU())
 
@@ -147,7 +273,7 @@ def construct_discriminator(rows,
 
     dinput = Input(shape=(channels, rows, cols))
     doutput = discriminator_model(dinput)
-    return Model(dinput, doutput)
+    return Model(dinput, doutput), output_filters
 
 
 def main(generator_output_file,
@@ -156,23 +282,23 @@ def main(generator_output_file,
          cols,
          channels,
          latent_dim,
-         generator_filter_sizes,
-         discriminator_filter_sizes,
+         filter_sizes,
          kernel_shapes):
-    
-    # create the generator network
+
+    # create the disriminator network
+    discriminator, output_filters = construct_discriminator(
+        rows, cols, channels,
+        filter_sizes,
+        kernel_shapes)
+
+    # create the generator network, using the shape of the discriminator
+    # network to cue the sizes of each layer
     generator = construct_generator(rows,
                                     cols,
                                     channels,
                                     latent_dim,
-                                    generator_filter_sizes,
-                                    kernel_shapes)
-
-
-    # create the disriminator network
-    discriminator = construct_discriminator(rows, cols, channels,
-                                            discriminator_filter_sizes,
-                                            kernel_shapes)
+                                    list(reversed(output_filters)))
+                                    # kernel_shapes)
 
     generator.save(generator_output_file)
     discriminator.save(discriminator_output_file)
@@ -211,14 +337,7 @@ if __name__ == '__main__':
                         type=int,
                         required=True)
 
-    parser.add_argument('--generator-filter-sizes',
-                        help='List of integers, used as filter sizes for the generator.',
-                        nargs='+',
-                        action='store',
-                        type=int,
-                        required=True)
-
-    parser.add_argument('--discriminator-filter-sizes',
+    parser.add_argument('--filter-sizes',
                         help='List of integers, used as filter sizes for the generator.',
                         action='store',
                         nargs='+',
@@ -246,6 +365,5 @@ if __name__ == '__main__':
          args.cols,
          args.channels,
          args.latent_dim,
-         args.generator_filter_sizes,
-         args.discriminator_filter_sizes,
+         args.filter_sizes,
          args.kernel_shapes)

@@ -13,9 +13,35 @@ import keras.backend
 import keras.datasets
 from keras.layers import Input
 from keras.models import Model
-from keras.optimizers import Adam
+from keras.optimizers import RMSprop
 import numpy
 from progressbar import ProgressBar
+
+
+def duplicated_render(filename, generator, grid_size):
+    latent_dim = generator.input_shape[1]
+    z = numpy.random.normal(0,1,size=(grid_size*grid_size, latent_dim))
+    fake_batch = generator.predict(z)
+
+    channels, height, width = fake_batch.shape[-3:]
+
+    collage = numpy.zeros((height*grid_size, width*grid_size, channels))
+
+    batch = 0
+    mn = numpy.min(fake_batch)
+    mx = numpy.max(fake_batch)
+    dif = mx - mn
+    for i in range(grid_size):
+        for j in range(grid_size):
+            collage[i*height:(i+1)*height,
+                    j*width:(j+1)*width,:] = numpy.transpose(
+                        (fake_batch[i*grid_size+j,...] - mn) / dif,
+                        (1,2,0)
+            )
+
+    collage = numpy.squeeze(collage*255)
+    cv2.imwrite(filename, collage.astype(numpy.uint8))
+
 
 def wasserstein_loss(y_true, y_pred):
     """
@@ -37,10 +63,11 @@ def train(data,
           batch_size,
           n_epochs,
           test_data=None,
-          n_generator_sub_epochs=20):
+          n_critic_iterations_per_epoch=50):
 
     latent_dim = generator.input_shape[1]
     n_real_images = data.shape[0]
+    n_real_batches = n_real_images // batch_size
     inds = numpy.array(range(n_real_images))
 
     real_output_values = numpy.ones((batch_size,1))
@@ -58,8 +85,11 @@ def train(data,
 
         print('Epoch {}'.format(epoch))
 
-        # split up some batches
-        for bstart in bar(range(0,n_real_images,batch_size)):
+        # update the critic repeatedly
+        for batch_ind in bar(range(n_critic_iterations_per_epoch)):
+            modded_batch_ind = batch_ind % n_real_batches
+            bstart = modded_batch_ind * batch_size
+
             real_batch = data[inds[bstart:bstart+batch_size],
                               ...]
 
@@ -82,32 +112,57 @@ def train(data,
                                for w in discriminator.get_weights()]
             discriminator.set_weights(clipped_weights)
 
-            # and now do the generator
-            # for k in range(n_generator_sub_epochs):
-            if n_disc % n_generator_sub_epochs == 0:
-                # double the batch size since the discriminator saw that many things
-                z = numpy.random.normal(0,1,size=(cur_batch_size, latent_dim))
-                generator_loss = combined.train_on_batch(z, real_output_values[:cur_batch_size])
+        # update the generator only once at the end
+        z = numpy.random.normal(0,1,size=(cur_batch_size, latent_dim))
+        generator_loss = combined.train_on_batch(z, real_output_values[:cur_batch_size])
 
         print('d_loss = {}, g_loss = {}'.format(
             d_loss,
             generator_loss))
 
-        generator.save('mygen.mdl')
-        discriminator.save('mydisc.mdl')
-
         if test_data is not None:
             num_elements = test_data.shape[0]
-
             real_output = discriminator.predict(test_data)
             fake_output = combined.predict(
                 numpy.random.normal(0,1,size=(num_elements, latent_dim))
             )
 
-            import ipdb
-            ipdb.set_trace()
+            print('Real range: [{}, {}], Fake range: [{}, {}]'.format(
+                real_output.min(),
+                real_output.max(),
+                fake_output.min(),
+                fake_output.max()))
+
+        generator.save('mygen.mdl')
+        discriminator.save('mydisc.mdl')
+
+        if epoch % 50 == 0:
+            duplicated_render('wgan_images/{:09d}.png'.format(epoch),
+                              generator,
+                              10)
+
+        # if test_data is not None:
+        #     num_elements = test_data.shape[0]
+
+        #     real_output = discriminator.predict(test_data)
+        #     fake_output = combined.predict(
+        #         numpy.random.normal(0,1,size=(num_elements, latent_dim))
+        #     )
+
+        #     # import ipdb
+        #     # ipdb.set_trace()
 
     return
+
+
+def normalize_data(input_data):
+    # make data fit in [-1,1] range
+
+    mn = input_data.min()
+    mx = input_data.max()
+
+    output_data = 2.*((input_data - mn) / (mx-mn)) - 1.
+    return output_data
 
 
 def main(generator_file,
@@ -137,12 +192,17 @@ def main(generator_file,
     else:
         test_data = x_test
 
+    data = normalize_data(data)
+    test_data = normalize_data(test_data)
+
+    print('Data range: [{},{}]'.format(data.min(), data.max()))
+    print('Test data range: [{},{}]'.format(test_data.min(), test_data.max()))
 
     # get the input sizes
     img_rows, img_cols = data.shape[-2:]
 
     # compile the models; first compile the base discriminator
-    optimizer = Adam(lr=.001, decay=1e-6)
+    optimizer = RMSprop(lr=0.00005) # Adam(lr=.001, decay=1e-6)
     discriminator.compile(loss=wasserstein_loss,
                           optimizer=optimizer)
 

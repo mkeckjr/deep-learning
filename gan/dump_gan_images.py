@@ -29,7 +29,6 @@ def render(filename, generator, grid_size):
             )
 
     collage = numpy.squeeze(collage*255)
-    
     cv2.imwrite(filename, collage.astype(numpy.uint8))
 
 
