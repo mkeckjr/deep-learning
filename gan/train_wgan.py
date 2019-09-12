@@ -66,6 +66,7 @@ def train(data,
           n_critic_iterations_per_epoch=5):
 
     latent_dim = generator.input_shape[-1]
+
     n_real_images = data.shape[0]
     n_real_batches = n_real_images // batch_size
     inds = numpy.array(range(n_real_images))
@@ -156,7 +157,7 @@ def normalize_data(input_data):
     mn = input_data.min()
     mx = input_data.max()
 
-    output_data = 2.*((input_data - mn) / (mx-mn)) - 1.
+    output_data = 2.*((input_data - mn) / float(mx-mn)) - 1.
     return output_data
 
 
@@ -194,12 +195,12 @@ def main(generator_file,
 
     # compile the models; first compile the base discriminator
     discriminator.compile(loss=wasserstein_loss,
-                          RMSprop(lr=0.00005))
+                          optimizer=RMSprop(lr=0.00005))
 
     # okay, now turn off training of the discriminator to make a
     # combined loss
     discriminator.trainable = False
-    combined_input = Input(shape=(1,1,latent_dim,))
+    combined_input = Input(shape=(latent_dim,))
     combined = Model(combined_input, discriminator(generator(combined_input)))
     combined.compile(loss=wasserstein_loss,
                      optimizer=RMSprop(lr=0.00005))
