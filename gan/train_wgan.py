@@ -19,8 +19,8 @@ from progressbar import ProgressBar
 
 
 def duplicated_render(filename, generator, grid_size):
-    latent_dim = generator.input_shape[1]
-    z = numpy.random.normal(0,1,size=(grid_size*grid_size, latent_dim))
+    latent_dim = generator.input_shape[-1]
+    z = numpy.random.random(size=(grid_size*grid_size, latent_dim))
     fake_batch = generator.predict(z)
 
     channels, height, width = fake_batch.shape[-3:]
@@ -53,7 +53,7 @@ def wasserstein_loss(y_true, y_pred):
 
     Returns: Wasserstein loss given the truth/prediction
     """
-    return keras.backend.mean(y_true * y_pred)
+    return -keras.backend.mean(y_true * y_pred)
 
 
 def train(data,
@@ -63,9 +63,9 @@ def train(data,
           batch_size,
           n_epochs,
           test_data=None,
-          n_critic_iterations_per_epoch=50):
+          n_critic_iterations_per_epoch=5):
 
-    latent_dim = generator.input_shape[1]
+    latent_dim = generator.input_shape[-1]
     n_real_images = data.shape[0]
     n_real_batches = n_real_images // batch_size
     inds = numpy.array(range(n_real_images))
@@ -81,12 +81,17 @@ def train(data,
 
         bar = ProgressBar()
 
-        n_disc = 0
-
         print('Epoch {}'.format(epoch))
 
         # update the critic repeatedly
-        for batch_ind in bar(range(n_critic_iterations_per_epoch)):
+        d_loss_total = 0
+
+        if epoch < 25 or epoch % 100 == 0:
+            n_critic_iterations = 100
+        else:
+            n_critic_iterations = n_critic_iterations_per_epoch
+
+        for batch_ind in bar(range(n_critic_iterations)):
             modded_batch_ind = batch_ind % n_real_batches
             bstart = modded_batch_ind * batch_size
 
@@ -96,7 +101,7 @@ def train(data,
             cur_batch_size = real_batch.shape[0]
 
             # make the same number of fake inputs
-            z = numpy.random.normal(0,1,size=(cur_batch_size, latent_dim))
+            z = numpy.random.random(size=(cur_batch_size, latent_dim))
             fake_batch = generator.predict(z)
 
             d_loss = discriminator.train_on_batch(
@@ -105,26 +110,28 @@ def train(data,
                               fake_output_values[:cur_batch_size]))
             )
 
-            n_disc += 0
+            d_loss_total += d_loss
 
-            # do the dumb clipping thing
+            # do the clipping thing
             clipped_weights = [numpy.clip(w, -0.01, 0.01)
                                for w in discriminator.get_weights()]
             discriminator.set_weights(clipped_weights)
 
         # update the generator only once at the end
-        z = numpy.random.normal(0,1,size=(cur_batch_size, latent_dim))
-        generator_loss = combined.train_on_batch(z, real_output_values[:cur_batch_size])
+        if epoch > 25:
+            z = numpy.random.random(size=(cur_batch_size, latent_dim))
+            generator_loss = combined.train_on_batch(z,
+                                                     real_output_values[:cur_batch_size])
 
-        print('d_loss = {}, g_loss = {}'.format(
-            d_loss,
+        print('d_loss_total = {}, d_loss = {}, g_loss = {}'.format(
+            d_loss_total, d_loss,
             generator_loss))
 
         if test_data is not None:
             num_elements = test_data.shape[0]
             real_output = discriminator.predict(test_data)
             fake_output = combined.predict(
-                numpy.random.normal(0,1,size=(num_elements, latent_dim))
+                numpy.random.random(size=(num_elements, latent_dim))
             )
 
             print('Real range: [{}, {}], Fake range: [{}, {}]'.format(
@@ -141,23 +148,11 @@ def train(data,
                               generator,
                               10)
 
-        # if test_data is not None:
-        #     num_elements = test_data.shape[0]
-
-        #     real_output = discriminator.predict(test_data)
-        #     fake_output = combined.predict(
-        #         numpy.random.normal(0,1,size=(num_elements, latent_dim))
-        #     )
-
-        #     # import ipdb
-        #     # ipdb.set_trace()
-
     return
 
 
 def normalize_data(input_data):
     # make data fit in [-1,1] range
-
     mn = input_data.min()
     mx = input_data.max()
 
@@ -175,8 +170,7 @@ def main(generator_file,
     if len(generator.input_shape) != 2:
         raise ValueError('Input shape of generator model is not 2-mode')
 
-    latent_dim = generator.input_shape[1]
-
+    latent_dim = generator.input_shape[-1]
     discriminator = keras.models.load_model(discriminator_file)
 
     dataset_module = getattr(keras.datasets, dataset_name)
@@ -198,27 +192,23 @@ def main(generator_file,
     print('Data range: [{},{}]'.format(data.min(), data.max()))
     print('Test data range: [{},{}]'.format(test_data.min(), test_data.max()))
 
-    # get the input sizes
-    img_rows, img_cols = data.shape[-2:]
-
     # compile the models; first compile the base discriminator
-    optimizer = RMSprop(lr=0.00005) # Adam(lr=.001, decay=1e-6)
     discriminator.compile(loss=wasserstein_loss,
-                          optimizer=optimizer)
+                          RMSprop(lr=0.00005))
 
     # okay, now turn off training of the discriminator to make a
     # combined loss
     discriminator.trainable = False
-
-    combined_input = Input(shape=(latent_dim,))
+    combined_input = Input(shape=(1,1,latent_dim,))
     combined = Model(combined_input, discriminator(generator(combined_input)))
     combined.compile(loss=wasserstein_loss,
-                     optimizer=optimizer)
+                     optimizer=RMSprop(lr=0.00005))
 
     train(data, generator, discriminator, combined,
           batch_size, epochs, test_data=test_data)
 
     return
+
 
 if __name__ == '__main__':
 
