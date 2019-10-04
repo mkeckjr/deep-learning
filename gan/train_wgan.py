@@ -1,6 +1,6 @@
 #!/usr/bin/python
 """
-An implementation of the weight-clipping Wasserstein GAN in Keras
+An implementation of the gradient penalty Wasserstein GAN in TensorFlow
 """
 
 from __future__ import print_function
@@ -8,132 +8,135 @@ from __future__ import print_function
 import argparse
 import os
 
-import cv2
-import keras.backend
 import keras.datasets
-from keras.layers import Input
-from keras.models import Model
-from keras.optimizers import RMSprop
 import numpy
 from progressbar import ProgressBar
 
+import tensorflow
+from tensorflow import keras
+from keras.layers import (
+    BatchNormalization,
+    Dense,
+    Flatten,
+    Input,
+    LeakyReLU,
+    Reshape
+)
+from keras.models import Model
 
-def duplicated_render(filename, generator, grid_size):
-    latent_dim = generator.input_shape[-1]
-    z = numpy.random.random(size=(grid_size*grid_size, latent_dim))
-    fake_batch = generator.predict(z)
-
-    channels, height, width = fake_batch.shape[-3:]
-
-    collage = numpy.zeros((height*grid_size, width*grid_size, channels))
-
-    batch = 0
-    mn = numpy.min(fake_batch)
-    mx = numpy.max(fake_batch)
-    dif = mx - mn
-    for i in range(grid_size):
-        for j in range(grid_size):
-            collage[i*height:(i+1)*height,
-                    j*width:(j+1)*width,:] = numpy.transpose(
-                        (fake_batch[i*grid_size+j,...] - mn) / dif,
-                        (1,2,0)
-            )
-
-    collage = numpy.squeeze(collage*255)
-    cv2.imwrite(filename, collage.astype(numpy.uint8))
+from . import wgan
+import dump_gan_images
 
 
-def wasserstein_loss(y_true, y_pred):
+def make_mnist_generator(output_shape=(1,28,28),
+                         dense_shape=512,
+                         latent_dim=100):
+    """Doing this the simple way right now, I'll make it more general when it works.
     """
-    Loss function for a Wasserstein GAN.
 
-    Args:
-        y_true: Tensor indicating the true value for each input
-        y_pred: Tensor indicating the predicted value for each input
+    z_input = Input((latent_dim,))
 
-    Returns: Wasserstein loss given the truth/prediction
-    """
-    return -keras.backend.mean(y_true * y_pred)
+    dense1 = Dense(dense_shape, input_shape=(latent_dim,))(z_input)
+    bn1 = BatchNormalization()(dense1)
+    act1 = LeakyReLU()(bn1)
+
+    dense2 = Dense(dense_shape, input_shape=(dense_shape,))(act1)
+    bn2 = BatchNormalization()(dense2)
+    act2 = LeakyReLU()(bn2)
+
+    dense3 = Dense(dense_shape, input_shape=(dense_shape,))(act2)
+    bn3 = BatchNormalization()(dense3)
+    act3 = LeakyReLU()(bn3)
+
+    dense4 = Dense(numpy.prod(output_shape),
+                   input_shape=(dense_shape,),
+                   activation='tanh')(act3)
+    reshaped = Reshape(output_shape)(dense4)
+
+    gen_model = Model([z_input], [reshaped])
+    return gen_model
+
+
+def make_mnist_discriminator(input_shape=(1,28,28),
+                             dense_shape=512):
+
+    d_input = Input(shape=input_shape)
+
+    if len(input_shape) > 1:
+        layer_input = Flatten()(d_input)
+    else:
+        layer_input = d_input
+
+    dense1 = Dense(dense_shape,
+                   input_shape=(numpy.prod(input_shape),))(layer_input)
+    act1 = LeakyReLU()(dense1)
+
+    dense2 = Dense(dense_shape,
+                   input_shape=(dense_shape,))(act1)
+    act2 = LeakyReLU()(dense2)
+
+    dense3 = Dense(dense_shape,
+                   input_shape=(dense_shape,))(act2)
+    act3 = LeakyReLU()(dense3)
+
+    output = Dense(1, input_shape=(dense_shape,))(act3)
+
+    disc_model = Model([d_input], [output])
+    return disc_model
 
 
 def train(data,
-          generator,
-          discriminator,
-          combined,
-          batch_size,
+          session,
+          gan_model,
           n_epochs,
           test_data=None,
-          n_critic_iterations_per_epoch=5):
+          n_critic_iters=5):
+    """Training function for the WGAN-GP model.
+    """
 
-    latent_dim = generator.input_shape[-1]
+    latent_dim = gan_model.latent_dim
+    batch_size = gan_model.batch_size
 
     n_real_images = data.shape[0]
     n_real_batches = n_real_images // batch_size
     inds = numpy.array(range(n_real_images))
 
-    real_output_values = numpy.ones((batch_size,1))
-    fake_output_values = -numpy.ones((batch_size,1))
-
-    generator_loss = 1.
-
     for epoch in range(n_epochs):
         # shuffle the real data
         numpy.random.shuffle(inds)
-
         bar = ProgressBar()
 
         print('Epoch {}'.format(epoch))
 
-        # update the critic repeatedly
-        d_loss_total = 0
-
-        if epoch < 25 or epoch % 100 == 0:
-            n_critic_iterations = 100
+        # burn in hard early
+        if epoch <= 25:
+            n_batches_per_epoch = min(100,n_real_batches)
         else:
-            n_critic_iterations = n_critic_iterations_per_epoch
+            n_batches_per_epoch = min(n_critic_iters, n_real_batches)
 
-        for batch_ind in bar(range(n_critic_iterations)):
-            modded_batch_ind = batch_ind % n_real_batches
-            bstart = modded_batch_ind * batch_size
+        for batch_i in bar(range(n_batches_per_epoch)):
+            b_start = batch_i * n_real_batches
+            b_end = b_start + batch_size
 
-            real_batch = data[inds[bstart:bstart+batch_size],
-                              ...]
+            # real and fake batch
+            real_batch = data[inds[b_start:b_end], ...]
+            z = numpy.random.random(size=(batch_size, latent_dim))
 
-            cur_batch_size = real_batch.shape[0]
+            if real_batch.shape[0] != batch_size:
+                continue
 
-            # make the same number of fake inputs
-            z = numpy.random.random(size=(cur_batch_size, latent_dim))
-            fake_batch = generator.predict(z)
+            gan_model.train_discriminator(session, real_batch)
 
-            d_loss = discriminator.train_on_batch(
-                numpy.concatenate((real_batch, fake_batch), axis=0),
-                numpy.vstack((real_output_values[:cur_batch_size],
-                              fake_output_values[:cur_batch_size]))
-            )
-
-            d_loss_total += d_loss
-
-            # do the clipping thing
-            clipped_weights = [numpy.clip(w, -0.01, 0.01)
-                               for w in discriminator.get_weights()]
-            discriminator.set_weights(clipped_weights)
-
-        # update the generator only once at the end
         if epoch > 25:
-            z = numpy.random.random(size=(cur_batch_size, latent_dim))
-            generator_loss = combined.train_on_batch(z,
-                                                     real_output_values[:cur_batch_size])
-
-        print('d_loss_total = {}, d_loss = {}, g_loss = {}'.format(
-            d_loss_total, d_loss,
-            generator_loss))
+            gan_model.train_adversarial(session)
 
         if test_data is not None:
             num_elements = test_data.shape[0]
-            real_output = discriminator.predict(test_data)
-            fake_output = combined.predict(
+            real_output = gan_model.discriminator.predict(test_data)
+            fake_samples = gan_model.generator.predict(
                 numpy.random.random(size=(num_elements, latent_dim))
             )
+            fake_output = gan_model.discriminator.predict(fake_samples)
 
             print('Real range: [{}, {}], Fake range: [{}, {}]'.format(
                 real_output.min(),
@@ -141,41 +144,29 @@ def train(data,
                 fake_output.min(),
                 fake_output.max()))
 
-        generator.save('mygen.mdl')
-        discriminator.save('mydisc.mdl')
+        gan_model.generator.save('mygen.mdl')
+        gan_model.discriminator.save('mydisc.mdl')
 
         if epoch % 50 == 0:
-            duplicated_render('wgan_images/{:09d}.png'.format(epoch),
-                              generator,
-                              10)
+            outdir = os.path.expanduser(
+                '~/deep-learning/gan/wgan_images/{:09d}.png'.format(epoch))
+            print('Saving images to {}'.format(outdir))
+                  
+            dump_gan_images.render(outdir,
+                                   gan_model.generator,
+                                   10)
 
     return
 
 
-def normalize_data(input_data):
-    # make data fit in [-1,1] range
-    mn = input_data.min()
-    mx = input_data.max()
-
-    output_data = 2.*((input_data - mn) / float(mx-mn)) - 1.
-    return output_data
-
-
-def main(generator_file,
-         discriminator_file,
-         dataset_name,
-         batch_size,
+def main(batch_size,
          epochs):
 
-    generator = keras.models.load_model(generator_file)
-    if len(generator.input_shape) != 2:
-        raise ValueError('Input shape of generator model is not 2-mode')
-
+    generator = make_mnist_generator()
     latent_dim = generator.input_shape[-1]
-    discriminator = keras.models.load_model(discriminator_file)
+    discriminator = make_mnist_discriminator()
 
-    dataset_module = getattr(keras.datasets, dataset_name)
-    (x_train, y_train), (x_test,y_test) = dataset_module.load_data()
+    (x_train, y_train), (x_test,y_test) = keras.datasets.mnist.load_data()
 
     if len(x_train.shape) == 3:
         data = x_train[:,numpy.newaxis,...]
@@ -187,26 +178,26 @@ def main(generator_file,
     else:
         test_data = x_test
 
-    data = normalize_data(data)
-    test_data = normalize_data(test_data)
+    data = (data - 127.5) / 127.5
+    test_data = (test_data - 127.5) / 127.5
 
     print('Data range: [{},{}]'.format(data.min(), data.max()))
     print('Test data range: [{},{}]'.format(test_data.min(), test_data.max()))
 
-    # compile the models; first compile the base discriminator
-    discriminator.compile(loss=wasserstein_loss,
-                          optimizer=RMSprop(lr=0.00005))
 
-    # okay, now turn off training of the discriminator to make a
-    # combined loss
-    discriminator.trainable = False
-    combined_input = Input(shape=(latent_dim,))
-    combined = Model(combined_input, discriminator(generator(combined_input)))
-    combined.compile(loss=wasserstein_loss,
-                     optimizer=RMSprop(lr=0.00005))
+    gan_model = wgan.WGAN(generator,
+                          discriminator,
+                          batch_size,
+                          clip=0.01)
 
-    train(data, generator, discriminator, combined,
-          batch_size, epochs, test_data=test_data)
+    with tensorflow.Session() as sess:
+        sess.run(tensorflow.global_variables_initializer())
+
+        train(data,
+              sess,
+              gan_model,
+              epochs,
+              test_data=test_data)
 
     return
 
@@ -214,20 +205,8 @@ def main(generator_file,
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(
-        description='Train a Wasserstein GAN',
+        description='Train a Wasserstein GAN with gradient penalty on MNIST',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-
-    parser.add_argument('generator',
-                        help='Input generator, a Keras model filename.',
-                        action='store')
-
-    parser.add_argument('discriminator',
-                        help='Input discriminator, a Keras model filename.',
-                        action='store')
-
-    parser.add_argument('data_input_file',
-                        help='Input NPZ file.',
-                        action='store')
 
     parser.add_argument('--batch-size',
                         help='Size of batches.',
@@ -241,8 +220,5 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    main(args.generator,
-         args.discriminator,
-         args.data_input_file,
-         args.batch_size,
+    main(args.batch_size,
          args.epochs)
