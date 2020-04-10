@@ -7,10 +7,11 @@ import cv2
 import keras.models
 import numpy
 
-def render(filename, generator, grid_size):
-    latent_dim = generator.input_shape[1]
-    z = numpy.random.normal(0,1,size=(grid_size*grid_size, latent_dim))
-    fake_batch = generator.predict(z)
+def render(filename, gan, grid_size):
+    latent_dim = gan.generator_model.input_shape[1]
+    z = numpy.random.normal(0,1,size=(grid_size*grid_size, latent_dim)).astype(numpy.float32)
+    # z = gan.generate_noise()
+    fake_batch = gan.generator(z)
 
     channels, height, width = fake_batch.shape[-3:]
 
