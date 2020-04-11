@@ -84,6 +84,18 @@ def make_mnist_discriminator(input_shape=(1,28,28),
     return disc_model
 
 
+def make_mnist_conv_discriminator(input_shape=(1,28,28),
+                                  kernels):
+    """Make an MNIST discriminator that is convolutional
+    """
+
+    d_input = Input(shape=input_shape)
+
+    # keep it simple, 3 convolutional/max pooling layers
+    # and an MLP layer at the end
+    return None
+
+
 def train(data,
           gan_model,
           n_epochs,

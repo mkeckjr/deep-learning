@@ -16,10 +16,12 @@ import tensorflow
 from tensorflow import keras
 from keras.layers import (
     BatchNormalization,
+    Conv2D,
     Dense,
     Flatten,
     Input,
     LeakyReLU,
+    MaxPool2D,
     Reshape
 )
 from keras.models import Model
@@ -85,11 +87,37 @@ def make_mnist_discriminator(input_shape=(1,28,28),
     return disc_model
 
 
+def make_conv_pool_layer(input_tensor, n_filters, filter_size):
+    conv_layer = LeakyReLU()(
+        Conv2D(n_filters,
+               filter_size,
+               padding='same',
+               data_format='channels_first')(input_tensor)
+    )
+
+    return MaxPool2D(padding='same',
+                     data_format='channels_first')(conv_layer)
+
+
+def make_mnist_conv_discriminator(input_shape=(1,28,28)):
+    # keep it simple, 3 conv/max pool layers followed by a Dense
+    d_input = Input(shape=input_shape)
+
+    features1 = make_conv_pool_layer(d_input, 32, 5)
+    features2 = make_conv_pool_layer(features1, 64, 5)
+    features3 = make_conv_pool_layer(features2, 128, 5)
+
+    flattened = Flatten()(features3)
+
+    output = Dense(1)(flattened)
+    return Model([d_input], [output])
+
+
 def train(data,
           gan_model,
           n_epochs,
-          test_data=None,
-          n_critic_iters=5):
+          n_critic_iters,
+          test_data=None):
     """Training function for the WGAN-GP model.
     """
 
@@ -123,8 +151,13 @@ def train(data,
         gan_model.train_adversarial()
 
         if test_data is not None:
-            num_elements = test_data.shape[0]
-            real_output = gan_model.discriminator(test_data).numpy()
+            # do one batch of test data
+            indices = list(range(0,test_data.shape[0]))
+            numpy.random.shuffle(indices)
+
+            num_elements = min(batch_size, test_data.shape[0])
+            test_batch = test_data[indices[:num_elements],...]
+            real_output = gan_model.discriminator(test_batch).numpy()
             fake_samples = gan_model.generator(
                 numpy.random.normal(size=(num_elements, latent_dim)).astype(numpy.float32)
             )
@@ -143,7 +176,7 @@ def train(data,
             outdir = os.path.expanduser(
                 '/home/deep-learning/gan/wgangp_images/{:09d}.png'.format(epoch))
             print('Saving images to {}'.format(outdir))
-                  
+
             dump_gan_images.render(outdir,
                                    gan_model,
                                    10)
@@ -161,11 +194,13 @@ def normalize_data(input_data):
 
 
 def main(batch_size,
-         epochs):
+         epochs,
+         n_critic_iters):
 
     generator = make_mnist_generator()
     latent_dim = generator.input_shape[-1]
-    discriminator = make_mnist_discriminator()
+    # discriminator = make_mnist_discriminator()
+    discriminator = make_mnist_conv_discriminator()
 
     (x_train, y_train), (x_test,y_test) = keras.datasets.mnist.load_data()
 
@@ -182,9 +217,10 @@ def main(batch_size,
     data = (data - 127.5) / 127.5
     test_data = (test_data - 127.5) / 127.5
 
+    print('Data shape: {}'.format(data.shape))
     print('Data range: [{},{}]'.format(data.min(), data.max()))
+    print('Test data shape: {}'.format(test_data.shape))
     print('Test data range: [{},{}]'.format(test_data.min(), test_data.max()))
-
 
     gan_model = wgangp.WGANGP(generator,
                               discriminator,
@@ -194,6 +230,7 @@ def main(batch_size,
     train(data.astype(numpy.float32),
           gan_model,
           epochs,
+          n_critic_iters,
           test_data=test_data.astype(numpy.float32))
 
     return
@@ -215,7 +252,14 @@ if __name__ == '__main__':
                         type=int,
                         default=1000)
 
+    parser.add_argument('--n-critic-iters',
+                        help='Number of critic iterations to run per adversarial update.',
+                        type=int,
+                        default=5)
+
     args = parser.parse_args()
 
     main(args.batch_size,
-         args.epochs)
+         args.epochs,
+         args.n_critic_iters
+    )

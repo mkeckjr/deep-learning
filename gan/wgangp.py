@@ -10,11 +10,11 @@ class WGANGP(GenerativeAdversarialNetwork):
     """Wasserstein GAN with gradient penalty
 
     Implements the improved Wasserstein GAN training using a gradient penalty
-    term to enforce the K-Lipschitz constraint. 
+    term to enforce the K-Lipschitz constraint.
 
       https://arxiv.org/abs/1704.00028
     """
-    
+
     def __init__(self,
                  generator_model,
                  discriminator_model,
@@ -25,12 +25,12 @@ class WGANGP(GenerativeAdversarialNetwork):
         Args:
             generator_model: tensorflow.keras.models.Model instance that defines
                 the generator architecture
-            discriminator_model: tensorflow.keras.models.Model instance that 
-                defines the discriminator architecture, which should take as 
+            discriminator_model: tensorflow.keras.models.Model instance that
+                defines the discriminator architecture, which should take as
                 input a tensor that is the shape of the generator's output
             batch_size: Integer, the size of the batches that will be used for
                 training
-            penalty_weight: Float, positive, the weight of the gradient 
+            penalty_weight: Float, positive, the weight of the gradient
                 penalty term
         """
 
@@ -44,7 +44,7 @@ class WGANGP(GenerativeAdversarialNetwork):
     #     """Build the adversarial loss tensor
 
     #     This private function should only be accessed by the instance. It builds
-    #     the adversarial loss tensor, and assumes the adversarial model has 
+    #     the adversarial loss tensor, and assumes the adversarial model has
     #     already been built.
 
     #     At the function's end, one should expect the following members to be
@@ -80,13 +80,13 @@ class WGANGP(GenerativeAdversarialNetwork):
 
     #     gradients = tensorflow.gradients(discriminator_sample_output,
     #                                      [weighted_samples])[0]
-        
+
     #     normed_gradients = tensorflow.sqrt(
     #         tensorflow.reduce_sum(
     #             tensorflow.square(gradients),
     #             reduction_indices=[1])
     #     )
-        
+
     #     gradient_penalty = tensorflow.reduce_mean((1.-normed_gradients)**2)
     #     self.gradient_penalty = self.penalty_weight*gradient_penalty
 
@@ -111,7 +111,7 @@ class WGANGP(GenerativeAdversarialNetwork):
 
 
     def random_weighted_average(self, real_batch, fake_batch):
-        
+
         random_values = tensorflow.random.uniform(
             shape=[real_batch.shape[0]] + [1] * (len(real_batch.shape)-1),
             minval=0., maxval=1.
