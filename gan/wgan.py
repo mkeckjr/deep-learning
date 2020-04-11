@@ -41,24 +41,20 @@ class WGAN(GenerativeAdversarialNetwork):
                                    batch_size)
 
 
-    def train_discriminator_old(self, session, real_batch):
-        """Do a single batch update to the discriminator
-
-        This implementation calls the base class implementation and then clips
-        the gradients.
-
-        Args:
-            session: a tensorflow Session instance
-            real_batch: numpy array with shape congruent with the input to the
-                discriminator
+    def train_adversarial(self):
+        """Do a single batch update to the generator via the adversarial loss
         """
+        z = self.generate_noise()
+        with tensorflow.GradientTape() as tape:
+            loss = -tensorflow.reduce_mean(
+                self.discriminator(self.generator(z))
+            )
 
-        super(WGAN, self).train_discriminator(
-            session, real_batch)
+        gradients = tape.gradient(loss, self.generator_model.weights)
+        self.adversarial_opt.apply_gradients(
+            zip(gradients, self.generator_model.weights)
+        )
 
-        clipped_weights = [numpy.clip(w, -self.clip, self.clip)
-                           for w in self.discriminator.get_weights()]
-        self.discriminator.set_weights(clipped_weights)
 
 
     def train_discriminator(self, real_batch):

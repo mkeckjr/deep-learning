@@ -139,6 +139,22 @@ class WGANGP(GenerativeAdversarialNetwork):
         return self.penalty_weight*gp
 
 
+    def train_adversarial(self):
+        """Do a single batch update to the generator via the adversarial loss
+        """
+        z = self.generate_noise()
+        with tensorflow.GradientTape() as tape:
+            loss = -tensorflow.reduce_mean(
+                self.discriminator(self.generator(z))
+            )
+
+        gradients = tape.gradient(loss, self.generator_model.weights)
+        self.adversarial_opt.apply_gradients(
+            zip(gradients, self.generator_model.weights)
+        )
+
+
+
     def train_discriminator(self, real_batch):
         """Do a single batch update to the discriminator
 
