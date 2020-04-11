@@ -8,9 +8,8 @@ import keras.models
 import numpy
 
 def render(filename, gan, grid_size):
-    latent_dim = gan.generator_model.input_shape[1]
+    latent_dim = gan.latent_dim
     z = numpy.random.normal(0,1,size=(grid_size*grid_size, latent_dim)).astype(numpy.float32)
-    # z = gan.generate_noise()
     fake_batch = gan.generator(z)
 
     channels, height, width = fake_batch.shape[-3:]

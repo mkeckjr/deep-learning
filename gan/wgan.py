@@ -41,37 +41,7 @@ class WGAN(GenerativeAdversarialNetwork):
                                    batch_size)
 
 
-    def _build_adversarial_loss(self):
-        """Build the adversarial loss tensor
-
-        This private function should only be accessed by the instance. It builds
-        the adversarial loss tensor, and assumes the adversarial model has 
-        already been built.
-
-        At the function's end, one should expect the following members to be
-        defined:
-            adversarial_loss: scalar tensorflow Tensor that represents the loss
-                of the adversarial model on a batch
-        """
-        self.adversarial_loss = -tensorflow.reduce_mean(
-            self.adversarial_output
-        )
-
-    def _build_discriminator_loss(self):
-        """Build the discriminator training loss function from the outputs
-        """
-        self.discriminator_loss = (
-            # loss for real examples
-            -tensorflow.reduce_mean(
-                self.discriminator_output[0]) +
-
-            # loss for fake examples
-            tensorflow.reduce_mean(
-                self.discriminator_output[1])
-        )
-
-
-    def train_discriminator(self, session, real_batch):
+    def train_discriminator_old(self, session, real_batch):
         """Do a single batch update to the discriminator
 
         This implementation calls the base class implementation and then clips
@@ -89,3 +59,33 @@ class WGAN(GenerativeAdversarialNetwork):
         clipped_weights = [numpy.clip(w, -self.clip, self.clip)
                            for w in self.discriminator.get_weights()]
         self.discriminator.set_weights(clipped_weights)
+
+
+    def train_discriminator(self, real_batch):
+        """Do a single batch update to the discriminator
+
+        Args:
+            real_batch: numpy array with shape congruent with the input to the
+                discriminator
+        """
+        z = self.generate_noise()
+
+        with tensorflow.GradientTape() as tape:
+            real_prediction = self.discriminator(real_batch)
+            fake_prediction = self.discriminator(
+                self.generator(z)
+            )
+
+            real_loss = -tensorflow.reduce_mean(real_prediction)
+            fake_loss = tensorflow.reduce_mean(fake_prediction)
+
+            loss = real_loss + fake_loss
+
+        gradients = tape.gradient(loss, self.discriminator_model.weights)
+        self.discriminator_opt.apply_gradients(
+            zip(gradients, self.discriminator_model.weights)
+        )
+
+        clipped_weights = [numpy.clip(w, -self.clip, self.clip)
+                           for w in self.discriminator_model.get_weights()]
+        self.discriminator_model.set_weights(clipped_weights)

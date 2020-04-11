@@ -90,16 +90,13 @@ class GenerativeAdversarialNetwork(object):
 
     def train_adversarial(self):
         """Do a single batch update to the generator via the adversarial loss
-
-        Args:
-            session: a tensorflow Session instance
         """
         z = self.generate_noise()
 
         with tensorflow.GradientTape() as tape:
-            loss = self.adversarial_loss(
-                self.discriminator(
-                    self.generator(z)
+            loss = -tensorflow.reduce_mean(
+                tensorflow.math.log(
+                    self.discriminator(self.generator(z))
                 )
             )
 
@@ -113,7 +110,6 @@ class GenerativeAdversarialNetwork(object):
         """Do a single batch update to the discriminator
 
         Args:
-            session: a tensorflow Session instance
             real_batch: numpy array with shape congruent with the input to the
                 discriminator
         """

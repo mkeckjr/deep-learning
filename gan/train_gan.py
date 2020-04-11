@@ -10,7 +10,7 @@ import os
 
 import keras.datasets
 import numpy
-
+from progressbar import ProgressBar
 import tensorflow
 from tensorflow import keras
 from keras.layers import (
@@ -102,7 +102,7 @@ def train(data,
     for epoch in range(n_epochs):
         # shuffle the real data
         numpy.random.shuffle(inds)
-        # bar = ProgressBar()
+        bar = ProgressBar()
 
         print('Epoch {}'.format(epoch))
 
@@ -112,7 +112,7 @@ def train(data,
         else:
             n_batches_per_epoch = min(n_critic_iters, n_real_batches)
 
-        for batch_i in range(n_batches_per_epoch):
+        for batch_i in bar(range(n_batches_per_epoch)):
             b_start = batch_i * n_real_batches
             b_end = b_start + batch_size
 
@@ -125,7 +125,7 @@ def train(data,
 
             gan_model.train_discriminator(real_batch)
 
-        if epoch > 25:
+        if epoch > 5:
             gan_model.train_adversarial()
 
         if test_data is not None:
@@ -146,7 +146,7 @@ def train(data,
         gan_model.generator_model.save('mygen.mdl')
         gan_model.discriminator_model.save('mydisc.mdl')
 
-        if epoch % 1 == 0:
+        if epoch % 50 == 0:
             outdir = os.path.expanduser(
                 '/home/deep-learning/gan/gan_images/{:09d}.png'.format(epoch))
             print('Saving images to {}'.format(outdir))

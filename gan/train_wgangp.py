@@ -24,9 +24,8 @@ from keras.layers import (
 )
 from keras.models import Model
 
-# import gan_layers
 from . import wgangp
-import dump_gan_images
+from . import dump_gan_images
 
 
 def make_mnist_generator(output_shape=(1,28,28),
@@ -87,7 +86,6 @@ def make_mnist_discriminator(input_shape=(1,28,28),
 
 
 def train(data,
-          session,
           gan_model,
           n_epochs,
           test_data=None,
@@ -116,24 +114,21 @@ def train(data,
             b_start = batch_i * n_real_batches
             b_end = b_start + batch_size
 
-            # real and fake batch
             real_batch = data[inds[b_start:b_end], ...]
-            z = numpy.random.random(size=(batch_size, latent_dim))
-
             if real_batch.shape[0] != batch_size:
                 continue
 
-            gan_model.train_discriminator(session, real_batch)
+            gan_model.train_discriminator(real_batch)
 
-        gan_model.train_adversarial(session)
+        gan_model.train_adversarial()
 
         if test_data is not None:
             num_elements = test_data.shape[0]
-            real_output = gan_model.discriminator.predict(test_data)
-            fake_samples = gan_model.generator.predict(
-                numpy.random.random(size=(num_elements, latent_dim))
+            real_output = gan_model.discriminator(test_data).numpy()
+            fake_samples = gan_model.generator(
+                numpy.random.normal(size=(num_elements, latent_dim)).astype(numpy.float32)
             )
-            fake_output = gan_model.discriminator.predict(fake_samples)
+            fake_output = gan_model.discriminator(fake_samples).numpy()
 
             print('Real range: [{}, {}], Fake range: [{}, {}]'.format(
                 real_output.min(),
@@ -141,16 +136,16 @@ def train(data,
                 fake_output.min(),
                 fake_output.max()))
 
-        gan_model.generator.save('mygen.mdl')
-        gan_model.discriminator.save('mydisc.mdl')
+        gan_model.generator_model.save('mygen.mdl')
+        gan_model.discriminator_model.save('mydisc.mdl')
 
         if epoch % 50 == 0:
             outdir = os.path.expanduser(
-                '~/deep-learning/gan/wgangp_images/{:09d}.png'.format(epoch))
+                '/home/deep-learning/gan/wgangp_images/{:09d}.png'.format(epoch))
             print('Saving images to {}'.format(outdir))
                   
             dump_gan_images.render(outdir,
-                                   gan_model.generator,
+                                   gan_model,
                                    10)
 
     return
@@ -196,14 +191,10 @@ def main(batch_size,
                               batch_size,
                               penalty_weight=10)
 
-    with tensorflow.Session() as sess:
-        sess.run(tensorflow.global_variables_initializer())
-
-        train(data,
-              sess,
-              gan_model,
-              epochs,
-              test_data=test_data)
+    train(data.astype(numpy.float32),
+          gan_model,
+          epochs,
+          test_data=test_data.astype(numpy.float32))
 
     return
 
