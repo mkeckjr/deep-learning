@@ -1,3 +1,20 @@
+# Deep Learning Implementations Library
+# Copyright (C) 2020, Mark Keck
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+
 """
 Class for representing the classic GAN model
 """
@@ -25,7 +42,7 @@ class GenerativeAdversarialNetwork(object):
                  **kwargs):
         """Initialize a classic GAN
 
-        The GAN assumes two models are provided as input: (1) a generator which 
+        The GAN assumes two models are provided as input: (1) a generator which
         takes a 2-mode tensor as input that has shape (batch_size, latent_dim),
         and (2) a discriminator that takes a tensor the shape of the generator
         output and has output that is context dependent. In the vanilla case,
@@ -35,8 +52,8 @@ class GenerativeAdversarialNetwork(object):
         Args:
             generator_model: tensorflow.keras.models.Model instance that defines
                 the generator architecture
-            discriminator_model: tensorflow.keras.models.Model instance that 
-                defines the discriminator architecture, which should take as 
+            discriminator_model: tensorflow.keras.models.Model instance that
+                defines the discriminator architecture, which should take as
                 input a tensor that is the shape of the generator's output
         """
 
@@ -71,7 +88,7 @@ class GenerativeAdversarialNetwork(object):
             learning_rate=1e-4,
             beta_1=0.5,
             beta_2=0.9)
-    
+
         # train the discriminator model with only the discriminator weights
         self.discriminator_opt = tensorflow.keras.optimizers.Adam(
             learning_rate=1e-4,
@@ -141,4 +158,3 @@ class GenerativeAdversarialNetwork(object):
         z = self.generate_noise()
         imgs = generator.predict(z)
         return imgs
-

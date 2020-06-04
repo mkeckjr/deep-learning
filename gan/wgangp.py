@@ -1,3 +1,19 @@
+# Deep Learning Implementations Library
+# Copyright (C) 2020, Mark Keck
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
 """
 Class for representing the WGAN-GP model
 """
@@ -38,76 +54,6 @@ class WGANGP(GenerativeAdversarialNetwork):
         super(WGANGP, self).__init__(generator_model,
                                      discriminator_model,
                                      batch_size)
-
-
-    # def _build_adversarial_loss(self):
-    #     """Build the adversarial loss tensor
-
-    #     This private function should only be accessed by the instance. It builds
-    #     the adversarial loss tensor, and assumes the adversarial model has
-    #     already been built.
-
-    #     At the function's end, one should expect the following members to be
-    #     defined:
-    #         adversarial_loss: scalar tensorflow Tensor that represents the loss
-    #             of the adversarial model on a batch
-    #     """
-    #     self.adversarial_loss = -tensorflow.reduce_mean(
-    #         self.adversarial_output
-    #     )
-
-
-    # def _build_random_weighted_average(self):
-    #     """Create a random weighted average of two tensorflow tensors
-    #     """
-    #     shapes = [shp.value for shp in self.real_input.shape]
-
-    #     random_values = tensorflow.random_uniform(
-    #         shape=[self.batch_size,] + shapes[1:],
-    #         minval=0., maxval=1.
-    #     )
-
-    #     return (random_values * self.real_input +
-    #             (1-random_values) * self.generated_examples)
-
-
-    # def _build_gradient_penalty(self):
-    #     """Build the gradient penalty tensor
-    #     """
-
-    #     weighted_samples = self._build_random_weighted_average()
-    #     discriminator_sample_output = self.discriminator(weighted_samples)
-
-    #     gradients = tensorflow.gradients(discriminator_sample_output,
-    #                                      [weighted_samples])[0]
-
-    #     normed_gradients = tensorflow.sqrt(
-    #         tensorflow.reduce_sum(
-    #             tensorflow.square(gradients),
-    #             reduction_indices=[1])
-    #     )
-
-    #     gradient_penalty = tensorflow.reduce_mean((1.-normed_gradients)**2)
-    #     self.gradient_penalty = self.penalty_weight*gradient_penalty
-
-
-    # def _build_discriminator_loss(self):
-    #     """Build the discriminator training loss function from the outputs
-    #     """
-    #     self._build_gradient_penalty()
-
-    #     self.discriminator_loss = (
-    #         # loss for real examples
-    #         -tensorflow.reduce_mean(
-    #             self.discriminator_output[0]) +
-
-    #         # loss for fake examples
-    #         tensorflow.reduce_mean(
-    #             self.discriminator_output[1]) +
-
-    #         # gradient penalty
-    #         self.gradient_penalty
-    #     )
 
 
     def random_weighted_average(self, real_batch, fake_batch):
