@@ -1,6 +1,7 @@
-cudatoolkit==11.3
+# cudatoolkit==11.3
 ipdb
 matplotlib
 numpy
-pytorch
+pytest
+torch
 torchvision
