@@ -19,13 +19,21 @@
 Class for representing the classic GAN model
 """
 
+from typing import Union
+
 import numpy
-import tensorflow
+import torch
+import torch.nn
 
-from tensorflow import keras
-from keras.layers import Input
 
-class GenerativeAdversarialNetwork(object):
+def test_gradients_for_nan(parameters):
+    params = [param for param in parameters]
+    for param in params:
+        if torch.isnan(param.grad).any():
+            import ipdb; ipdb.set_trace()
+
+
+class GenerativeAdversarialNetwork:
     """Generative adversarial network interface and basic implementation
 
     Implements the classic generative adversarial network (GAN) and defines
@@ -34,12 +42,15 @@ class GenerativeAdversarialNetwork(object):
       https://arxiv.org/abs/1704.00028
     """
 
+    MIN_CLASSIFICATION_SCORE = 1e-8
+
     def __init__(self,
-                 generator_model,
-                 discriminator_model,
-                 batch_size,
-                 *args,
-                 **kwargs):
+                 latent_dim: int,
+                 batch_size: int,
+                 generator_model: torch.nn.Module,
+                 discriminator_model: torch.nn.Module,
+                 dtype: torch.dtype=None,
+                 device: Union[torch.device,str]=None):
         """Initialize a classic GAN
 
         The GAN assumes two models are provided as input: (1) a generator which
@@ -50,78 +61,129 @@ class GenerativeAdversarialNetwork(object):
         or not each element in the batch is real or fake.
 
         Args:
-            generator_model: tensorflow.keras.models.Model instance that defines
-                the generator architecture
-            discriminator_model: tensorflow.keras.models.Model instance that
-                defines the discriminator architecture, which should take as
-                input a tensor that is the shape of the generator's output
+            latent_dim: size of the latent space
+            generator_model: torch.nn.Module instance that defines the generator,
+                which takes input Tensor of size (batch_size, latent_dim) and outputs
+                (batch_size,) + output_dim of the data
+            discriminator_model: torch.nn.Module instance that the discriminator
+                which should take as input a tensor that is the shape of the 
+                generator's output and provides a (batch_size,1) output where that
+                output is between 0 and 1 (e.g. sigmoid)
         """
-
-        self.latent_dim = generator_model.input_shape[-1]
+        self.latent_dim = latent_dim
         self.batch_size = batch_size
-        self.input_shape = [shp
-                            for shp in discriminator_model.input_shape
-                            if shp is not None]
+        create_keys = dict()
 
+        if dtype is not None:
+            create_keys['dtype'] = dtype
+
+        if device is not None:
+            create_keys['device'] = device
+
+        # get the input shape to the discriminator by pushing something through
+        # the generator; using batch size of 2 to deal with batch norm
+        x_in = torch.ones((2, latent_dim), **create_keys)
+        y = generator_model(x_in)
+
+        self.input_shape = y.shape[1:]
         self.generator_model = generator_model
         self.discriminator_model = discriminator_model
+        self.sampler = torch.distributions.normal.Normal(
+            torch.tensor([0.0], **create_keys),
+            torch.tensor([1.0], **create_keys)
+        )
+        self.MIN_CLASSIFICATION_TENSOR = torch.tensor(
+            self.MIN_CLASSIFICATION_SCORE, **create_keys
+        )
+        self._create_optimizers()
 
-        self.create_optimizers()
+    def generate(self, gen_input: torch.Tensor):
+        """Run noise through the generator to create images.
 
+        Args:
+            gen_input: a torch.Tensor that is (batch_size, latent_dim) created
+                by calling generate_noise()
 
-    @tensorflow.function
-    def generator(self, gen_input):
+        Returns:
+            A torch.Tensor with shape (batch_size, C, W, H) containing generated 
+                images
+        """
         return self.generator_model(gen_input)
 
+    def discriminate(self, disc_input):
+        """Run a batch of images through discriminator
 
-    @tensorflow.function
-    def discriminator(self, disc_input):
+        Args:
+            disc_input: torch.Tensor with shape (batch_size, C, H, W) of images
+
+        Returns:
+            A torch.Tensor with shape (batch_size,) classifying each instance in 
+                the batch as real (value 1.0) or fake (value 0.0)
+        """
         return self.discriminator_model(disc_input)
 
-
-    def create_optimizers(self):
+    def _create_optimizers(self):
         """Creates the optimizer(s) used to train the network
         """
-
         # train the adversarial model with only the generator weights
-        self.adversarial_opt = tensorflow.keras.optimizers.Adam(
-            learning_rate=1e-4,
-            beta_1=0.5,
-            beta_2=0.9)
-
-        # train the discriminator model with only the discriminator weights
-        self.discriminator_opt = tensorflow.keras.optimizers.Adam(
-            learning_rate=1e-4,
-            beta_1=0.5,
-            beta_2=0.9
+        self.adversarial_opt = torch.optim.Adam(
+            self.generator_model.parameters(),
+            lr=1e-4, betas=(0.5, 0.9)
         )
 
+        # train the discriminator model with only the discriminator weights
+        self.discriminator_opt = torch.optim.Adam(
+            self.discriminator_model.parameters(),
+            lr=1e-4, betas=(0.5, 0.9)
+        )
 
-    def generate_noise(self):
+    def generate_noise(self, batch_size: int=None):
         """Generate a noise batch
-        """
-        return numpy.random.normal(
-            size=(self.batch_size,
-                  self.latent_dim)).astype(numpy.float32)
 
+        Args:
+            batch_size: int indicating the batch size of noise to create
+
+        Returns: 
+            A torch.Tensor with shape (batch_size, latent_dim) for passing 
+                through the generator network.
+        """
+        if batch_size is None:
+            batch_size = self.batch_size
+        
+        return self.sampler.sample(
+            sample_shape=(batch_size, self.latent_dim)
+        ).squeeze(-1)
+
+    def safe_log(self, scores):
+        """Safely take the log of a tensor of real numbers.
+
+        This function ensures that we do not take the log of zero.
+
+        Args:
+            scores: torch.Tensor of values of which we wish to take the log.
+
+        Returns:
+            torch.log(torch.maximum(scores, torch.tensor(epsilon)))
+        """
+        return torch.log(
+            torch.maximum(scores, self.MIN_CLASSIFICATION_TENSOR)
+        )
 
     def train_adversarial(self):
         """Do a single batch update to the generator via the adversarial loss
+
+        Returns:
+            torch.Tensor loss function 
         """
         z = self.generate_noise()
 
-        with tensorflow.GradientTape() as tape:
-            loss = -tensorflow.reduce_mean(
-                tensorflow.math.log(
-                    self.discriminator(self.generator(z))
-                )
-            )
+        classifications = self.discriminator_model(self.generator_model(z))
+        loss = -torch.mean(self.safe_log(classifications))
+        self.adversarial_opt.zero_grad()
+        loss.backward()        
+        self.adversarial_opt.step()
 
-        gradients = tape.gradient(loss, self.generator_model.weights)
-        self.adversarial_opt.apply_gradients(
-            zip(gradients, self.generator_model.weights)
-        )
-
+        return loss
 
     def train_discriminator(self, real_batch):
         """Do a single batch update to the discriminator
@@ -131,30 +193,47 @@ class GenerativeAdversarialNetwork(object):
                 discriminator
         """
         z = self.generate_noise()
+        real_prediction = self.discriminator_model(real_batch)
+        fake_images = self.generator_model(z)
+        fake_prediction = self.discriminator_model(fake_images)
+ 
+        real_loss = -torch.mean(self.safe_log(real_prediction))
+        fake_loss = -torch.mean(self.safe_log(1 - fake_prediction))
 
-        with tensorflow.GradientTape() as tape:
-            real_prediction = self.discriminator(real_batch)
-            fake_prediction = self.discriminator(
-                self.generator(z)
-            )
-
-            real_loss = tensorflow.reduce_mean(
-                tensorflow.math.log(real_prediction))
-            fake_loss = tensorflow.reduce_mean(
-                tensorflow.math.log(1 - fake_prediction)
-            )
-
-            loss = real_loss + fake_loss
-
-        gradients = tape.gradient(loss, self.discriminator_model.weights)
-        self.discriminator_opt.apply_gradients(
-            zip(gradients, self.discriminator_model.weights)
-        )
-
+        loss = real_loss + fake_loss
+        self.discriminator_opt.zero_grad()
+        loss.backward()
+        self.discriminator_opt.step()
+        return loss
 
     def draw_generator_samples(self):
         """Draw a single batch worth of samples
         """
-        z = self.generate_noise()
-        imgs = generator.predict(z)
-        return imgs
+        return self.generator_model(self.generate_noise())
+
+    def save(self, filename, **kwargs):
+        """Save a checkpoint
+        """
+
+        outdict = {
+            'generator_state_dict': self.generator_model.state_dict(),
+            'adversarial_opt_state_dict': self.adversarial_opt.state_dict(),
+            'discriminator_state_dict': self.discriminator_model.state_dict(),
+            'discriminator_opt_state_dict': self.discriminator_opt.state_dict(),
+        }
+
+        outdict.update(kwargs)
+        torch.save(outdict, filename)
+
+    def load(self, ckpt_file):
+        """Load a checkpoint
+        """
+        checkpoint = torch.load(ckpt_file)
+
+        self.generator_model.load_state_dict(checkpoint['generator_state_dict'])
+        self.adversarial_opt.load_state_dict(checkpoint['adversarial_opt_state_dict'])
+
+        self.discriminator_model.load_state_dict(checkpoint['discriminator_state_dict'])
+        self.discriminator_opt.load_state_dict(checkpoint['discriminator_opt_state_dict'])
+
+        return checkpoint

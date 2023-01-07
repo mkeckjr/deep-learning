@@ -23,146 +23,137 @@ from __future__ import print_function
 import argparse
 import os
 
-import keras.datasets
 import numpy
-from progressbar import ProgressBar
-import tensorflow
-from tensorflow import keras
-from keras.layers import (
-    BatchNormalization,
-    Dense,
+import torch
+from torch.nn import (
+    BatchNorm1d,
+    Linear,
     Flatten,
-    Input,
     LeakyReLU,
-    Reshape
+    Module,
+    Sequential
 )
-from keras.models import Model
+import torchvision
+from tqdm import tqdm
 
 from . import basegan
 from . import dump_gan_images
 
 
-def make_mnist_generator(output_shape=(1,28,28),
-                         dense_shape=512,
-                         latent_dim=100):
-    """Doing this the simple way right now, I'll make it more general when it works.
-    """
+class MLPGenerator(Module):
+    def __init__(
+        self,
+        latent_dim,
+        output_shape,
+        dense_shape=512,
+        dtype=torch.float32,
+        device=None
+    ):
+        super().__init__()
+        self.latent_dim = latent_dim
+        self.output_shape = output_shape
 
-    z_input = Input((latent_dim,))
+        kwargs = {'dtype': dtype}
+        if device is not None:
+            kwargs['device'] = device
 
-    dense1 = Dense(dense_shape, input_shape=(latent_dim,))(z_input)
-    bn1 = BatchNormalization()(dense1)
-    act1 = LeakyReLU()(bn1)
+        flattened_shape = numpy.prod(output_shape)
+        self.base_model = Sequential(
+            Linear(latent_dim, dense_shape, **kwargs),
+            BatchNorm1d(dense_shape, **kwargs),
+            LeakyReLU(),
+            Linear(dense_shape, dense_shape, **kwargs),
+            BatchNorm1d(dense_shape, **kwargs),
+            LeakyReLU(),
+            Linear(dense_shape, dense_shape, **kwargs),
+            BatchNorm1d(dense_shape, **kwargs),
+            LeakyReLU(),
+            Linear(dense_shape, flattened_shape, **kwargs)
+        )
 
-    dense2 = Dense(dense_shape, input_shape=(dense_shape,))(act1)
-    bn2 = BatchNormalization()(dense2)
-    act2 = LeakyReLU()(bn2)
-
-    dense3 = Dense(dense_shape, input_shape=(dense_shape,))(act2)
-    bn3 = BatchNormalization()(dense3)
-    act3 = LeakyReLU()(bn3)
-
-    dense4 = Dense(numpy.prod(output_shape),
-                   input_shape=(dense_shape,),
-                   activation='tanh')(act3)
-    reshaped = Reshape(output_shape)(dense4)
-
-    gen_model = Model([z_input], [reshaped])
-    return gen_model
-
-
-def make_mnist_discriminator(input_shape=(1,28,28),
-                             dense_shape=512):
-
-    d_input = Input(shape=input_shape)
-
-    if len(input_shape) > 1:
-        layer_input = Flatten()(d_input)
-    else:
-        layer_input = d_input
-
-    dense1 = Dense(dense_shape,
-                   input_shape=(numpy.prod(input_shape),))(layer_input)
-    act1 = LeakyReLU()(dense1)
-
-    dense2 = Dense(dense_shape,
-                   input_shape=(dense_shape,))(act1)
-    act2 = LeakyReLU()(dense2)
-
-    dense3 = Dense(dense_shape,
-                   input_shape=(dense_shape,))(act2)
-    act3 = LeakyReLU()(dense3)
-
-    output = Dense(1, input_shape=(dense_shape,))(act3)
-
-    disc_model = Model([d_input], [output])
-    return disc_model
+    def forward(self, x):
+        vectorized = self.base_model(x)
+        batch_size = vectorized.shape[0]
+        output = torch.reshape(vectorized, (batch_size,) + self.output_shape)
+        return output
 
 
-def make_mnist_conv_discriminator(input_shape=(1,28,28),
-                                  kernels):
-    """Make an MNIST discriminator that is convolutional
-    """
+class MLPDiscriminator(Module):
+    def __init__(
+        self,
+        input_shape,
+        dense_shape=512,
+        dtype=torch.float32,
+        device=None
+    ):
+        super().__init__()
+        self.input_shape = input_shape
 
-    d_input = Input(shape=input_shape)
+        kwargs = dict()
+        kwargs['dtype'] = dtype
+        if device is not None:
+            kwargs['device'] = device
 
-    # keep it simple, 3 convolutional/max pooling layers
-    # and an MLP layer at the end
-    return None
+        flatten_shape = numpy.prod(input_shape)
+        self.model = Sequential(
+            Linear(flatten_shape, dense_shape, **kwargs),
+            LeakyReLU(),
+            Linear(dense_shape, dense_shape, **kwargs),
+            LeakyReLU(),
+            Linear(dense_shape, dense_shape, **kwargs),
+            LeakyReLU(),
+            Linear(dense_shape, 1, **kwargs)
+        )
+
+    def forward(self, x):
+        flattened = torch.flatten(x, start_dim=1)
+        return torch.sigmoid(self.model(flattened))
 
 
-def train(data,
+def train(train_dataloader,
           gan_model,
           n_epochs,
-          test_data=None,
-          n_critic_iters=5):
+          device,
+          test_dataloader=None,
+          n_critic_iters_per_gen_update=10,
+          outdir=None,
+          save_frequency=10):
     """Training function for the WGAN-GP model.
     """
-
     latent_dim = gan_model.latent_dim
     batch_size = gan_model.batch_size
 
-    n_real_images = data.shape[0]
-    n_real_batches = n_real_images // batch_size
-    inds = numpy.array(range(n_real_images))
-
     for epoch in range(n_epochs):
         # shuffle the real data
-        numpy.random.shuffle(inds)
-        bar = ProgressBar()
-
         print('Epoch {}'.format(epoch))
 
-        # burn in hard early
-        if epoch <= 25:
-            n_batches_per_epoch = min(100,n_real_batches)
+        burn_in_epochs = 1
+
+        sum_disc_loss = 0
+        for j, (data, _) in enumerate(tqdm(train_dataloader)):
+            data = data.to(device)
+            disc_loss = gan_model.train_discriminator(data)
+            sum_disc_loss += disc_loss.cpu()
+
+            if (epoch > burn_in_epochs) and (j % n_critic_iters_per_gen_update == 0):
+                for k in range(2):
+                    gan_model.train_adversarial()
+
+        if j > 0:
+            print(f'{epoch}: Avergage disc loss: {sum_disc_loss / j}')
         else:
-            n_batches_per_epoch = min(n_critic_iters, n_real_batches)
+            print(f'{epoch}: No discriminative loss')
 
-        for batch_i in bar(range(n_batches_per_epoch)):
-            b_start = batch_i * n_real_batches
-            b_end = b_start + batch_size
+        if test_dataloader is not None:
+            for data, _ in test_dataloader:
+                data = data.to(device)
+                real_output = gan_model.discriminate(data).cpu()
+                break
 
-            # real and fake batch
-            real_batch = data[inds[b_start:b_end], ...]
-            z = numpy.random.random(size=(batch_size, latent_dim))
-
-            if real_batch.shape[0] != batch_size:
-                continue
-
-            gan_model.train_discriminator(real_batch)
-
-        if epoch > 5:
-            gan_model.train_adversarial()
-
-        if test_data is not None:
-            num_elements = test_data.shape[0]
-            real_output = gan_model.discriminator(test_data).numpy()
-            # z = gan_model.generate_noise()
-            fake_samples = gan_model.generator(
-                numpy.random.random(size=(num_elements, latent_dim)).astype(numpy.float32)
+            fake_samples = gan_model.generate(
+                gan_model.generate_noise()
             )
-            fake_output = gan_model.discriminator(fake_samples).numpy()
+            fake_output = gan_model.discriminate(fake_samples).cpu()
 
             print('Real range: [{}, {}], Fake range: [{}, {}]'.format(
                 real_output.min(),
@@ -170,56 +161,66 @@ def train(data,
                 fake_output.min(),
                 fake_output.max()))
 
-        gan_model.generator_model.save('mygen.mdl')
-        gan_model.discriminator_model.save('mydisc.mdl')
+        if epoch % save_frequency == 0:
+            outname = os.path.join(outdir, f'{epoch:09d}.png')
+            print('Saving images to {}'.format(outname))
 
-        if epoch % 50 == 0:
-            outdir = os.path.expanduser(
-                '/home/deep-learning/gan/gan_images/{:09d}.png'.format(epoch))
-            print('Saving images to {}'.format(outdir))
+            out_ckpt = os.path.join(outdir, f'{epoch:09d}.pt')
+            gan_model.save(out_ckpt, epoch=epoch)
 
-            dump_gan_images.render(outdir,
+            dump_gan_images.render(outname,
                                    gan_model, # .generator,
                                    10)
 
     return
 
 
-def main(batch_size,
-         epochs):
+def main(mnist_data_root,
+         batch_size,
+         latent_dim,
+         epochs,
+         image_output_dir,
+         save_frequency,
+         device):
 
-    generator = make_mnist_generator()
-    latent_dim = generator.input_shape[-1]
-    discriminator = make_mnist_discriminator()
+    generator = MLPGenerator(latent_dim, (1,28,28), device=device)
+    discriminator = MLPDiscriminator((1,28,28), device=device)
 
-    (x_train, y_train), (x_test,y_test) = keras.datasets.mnist.load_data()
+    # get the MNIST dataset
+    train_dataset = torchvision.datasets.MNIST(
+        mnist_data_root, train=True, download=True,
+        transform=torchvision.transforms.ToTensor()
+    )
+    train_dataloader = torch.utils.data.DataLoader(
+        train_dataset, batch_size=batch_size,
+        shuffle=True, num_workers=4,
+    )
 
-    if len(x_train.shape) == 3:
-        data = x_train[:,numpy.newaxis,...]
-    else:
-        data = x_train
-
-    if len(x_test.shape) == 3:
-        test_data = x_test[:,numpy.newaxis,...]
-    else:
-        test_data = x_test
-
-    data = (data - 127.5) / 127.5
-    test_data = (test_data - 127.5) / 127.5
-
-    print('Data range: [{},{}]'.format(data.min(), data.max()))
-    print('Test data range: [{},{}]'.format(test_data.min(), test_data.max()))
-
+    test_dataset = torchvision.datasets.MNIST(
+        mnist_data_root, train=False, download=True,
+        transform=torchvision.transforms.ToTensor()
+    )
+    test_dataloader = torch.utils.data.DataLoader(
+        test_dataset, batch_size=batch_size,
+        shuffle=True, num_workers=4,
+    )
 
     gan_model = basegan.GenerativeAdversarialNetwork(
+        latent_dim,
+        batch_size,
         generator,
         discriminator,
-        batch_size)
+        dtype=torch.float32,
+        device=device
+    )
 
-    train(data.astype(numpy.float32),
+    train(train_dataloader, # data.astype(torch.float32),
           gan_model,
           epochs,
-          test_data=test_data.astype(numpy.float32))
+          device,
+          test_dataloader=test_dataloader,
+          outdir=image_output_dir,
+          save_frequency=save_frequency)
 
     return
 
@@ -230,17 +231,51 @@ if __name__ == '__main__':
         description='Train a Wasserstein GAN with gradient penalty on MNIST',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
+    parser.add_argument('data_root',
+                        help='MNIST data root.',
+                        type=str)
+
     parser.add_argument('--batch-size',
                         help='Size of batches.',
                         type=int,
                         default=50)
+
+    parser.add_argument('--latent-dim',
+                        help='Size of latent dimension of generator.',
+                        type=int,
+                        default=100)
 
     parser.add_argument('--epochs',
                         help='Size of batches.',
                         type=int,
                         default=1000)
 
+    parser.add_argument('--image-output-dir',
+                        help='Output directory in which to store generated images.',
+                        type=str,
+                        default=None)
+
+    parser.add_argument('--gpu-id',
+                        help='GPU ID on which to run (None indicates a CPU device).',
+                        type=int,
+                        default=None)
+
+    parser.add_argument('--save-freq',
+                        help='Frequency with which to save output images/checkpoints.',
+                        type=int,
+                        default=None)
+
     args = parser.parse_args()
 
-    main(args.batch_size,
-         args.epochs)
+    if args.gpu_id is None:
+        device = torch.device('cpu')
+    else:
+        device = torch.device(f'cuda:{args.gpu_id}')
+
+    main(args.data_root,
+         args.batch_size,
+         args.latent_dim,
+         args.epochs,
+         args.image_output_dir,
+         args.save_freq,
+         device)

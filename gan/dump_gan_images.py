@@ -19,14 +19,11 @@ from __future__ import print_function
 import argparse
 
 import cv2
-import keras.models
 import numpy
 
 def render(filename, gan, grid_size):
-    latent_dim = gan.latent_dim
-    z = numpy.random.normal(0,1,size=(grid_size*grid_size, latent_dim)).astype(numpy.float32)
-    fake_batch = gan.generator(z)
-
+    batch_size = grid_size ** 2
+    fake_batch = gan.generate(gan.generate_noise(batch_size)).detach().cpu().numpy()
     channels, height, width = fake_batch.shape[-3:]
 
     collage = numpy.zeros((height*grid_size, width*grid_size, channels))
@@ -47,36 +44,36 @@ def render(filename, gan, grid_size):
     cv2.imwrite(filename, collage.astype(numpy.uint8))
 
 
-def main(filename,
-         generator_file,
-         grid_size):
+# def main(filename,
+#          generator_file,
+#          grid_size):
 
-    generator = keras.models.load_model(generator_file)
-    render(filename, generator, grid_size)
+#     generator = keras.models.load_model(generator_file)
+#     render(filename, generator, grid_size)
 
-    return
+#     return
 
-if __name__ == '__main__':
+# if __name__ == '__main__':
 
-    parser = argparse.ArgumentParser(
-        description='Dump GAN images to image files as collages',
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+#     parser = argparse.ArgumentParser(
+#         description='Dump GAN images to image files as collages',
+#         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
-    parser.add_argument('generator',
-                        help='Input generator, a Keras model filename.',
-                        action='store')
+#     parser.add_argument('generator',
+#                         help='Input generator, a Keras model filename.',
+#                         action='store')
 
-    parser.add_argument('output_filename',
-                        help='Name of output image file (use extension to indicate format).',
-                        action='store')
+#     parser.add_argument('output_filename',
+#                         help='Name of output image file (use extension to indicate format).',
+#                         action='store')
 
-    parser.add_argument('--grid-size',
-                        help='Size of collage grid.',
-                        type=int,
-                        default=50)
+#     parser.add_argument('--grid-size',
+#                         help='Size of collage grid.',
+#                         type=int,
+#                         default=50)
 
-    args = parser.parse_args()
+#     args = parser.parse_args()
 
-    main(args.output_filename,
-         args.generator,
-         args.grid_size)
+#     main(args.output_filename,
+#          args.generator,
+#          args.grid_size)

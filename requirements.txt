@@ -1,0 +1,6 @@
+cudatoolkit==11.3
+ipdb
+matplotlib
+numpy
+pytorch
+torchvision
