@@ -30,5 +30,5 @@ jobs:
     - name: Install the project
       run: uv sync --locked --all-extras --dev
 
-    -name: Run pytest
+    - name: Run pytest
       run: uv run pytest
