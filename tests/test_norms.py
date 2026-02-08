@@ -1,6 +1,6 @@
 import torch
 
-from keck_llm.layers import LayerNorm
+from keck_dl.llm.layers import LayerNorm
 
 def test_layernorm():
     batch_size = 2

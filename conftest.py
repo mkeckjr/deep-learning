@@ -3,7 +3,7 @@ import pytest
 import requests
 from pathlib import Path
 
-from keck_llm import get_base_directory
+from keck_dl import get_base_directory
 
 
 def pytest_configure(config):
@@ -23,4 +23,4 @@ def pytest_configure(config):
 
 @pytest.fixture
 def small_text_path():
-    return Path(get_base_directory()) / 'data' / 'small_data.txt'
+    return Path(get_base_directory()) / 'llm' / 'data' / 'small_data.txt'

@@ -1,6 +1,6 @@
 import torch
 
-from keck_llm.layers import SimpleAttention, MultiHeadAttention
+from keck_dl.llm.layers import SimpleAttention, MultiHeadAttention
 
 def test_simple_attention():
     batch_size = 2

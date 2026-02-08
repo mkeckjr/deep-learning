@@ -1,6 +1,6 @@
 import torch
 
-from keck_llm.models import GPTBlock, GPTModel, GPT2_DEFAULTS
+from keck_dl.llm.models import GPTBlock, GPTModel, GPT2_DEFAULTS
 
 def test_gpt_model():
     gpt2_block = GPTBlock(

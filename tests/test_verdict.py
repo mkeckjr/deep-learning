@@ -1,4 +1,4 @@
-from . import BasicTokenizer
+from keck_dl.llm.tokenizing import BasicTokenizer
 
 def test_small_text_readable(small_text_path):
     # find the verdict file if it's here
