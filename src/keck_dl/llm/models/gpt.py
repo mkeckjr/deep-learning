@@ -1,3 +1,4 @@
+import tiktoken
 import torch
 from typing import Optional
 
@@ -12,7 +13,7 @@ GPT2_DEFAULTS = {
     'dropout': 0.1,
     'mask': 'causal',
     'bias': False,
-    'dtype': torch.float
+    'dtype': torch.float,
 }
 
 class GPTFFN(torch.nn.Module):
@@ -99,7 +100,7 @@ class GPTModel(torch.nn.Module):
             bias: bool = False,
             dropout: float = 0.1,
             mask: Optional[str] = None,
-            dtype: Optional[str] = None
+            dtype: Optional[str] = None,
     ):
         super().__init__()
         self.n_vocab = n_vocab
@@ -125,6 +126,7 @@ class GPTModel(torch.nn.Module):
 
         self.ln_out = LayerNorm(embed_dim)
         self.Wout = torch.nn.Linear(embed_dim, n_vocab, bias=False)
+
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass of a GPT-style Transformer
